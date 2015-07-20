@@ -12,7 +12,7 @@ parameters:
         type: string
         label: Key Name
         description: "Name of an existing Nectar KeyPair (enables SSH access to the instances)"
-        default: "richard_on_nectar_v3"
+        default: "xxxx_key"
     
     # We will limit the maximum number of instances to 10. Just because.
     instance_count:
