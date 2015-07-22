@@ -1,10 +1,28 @@
 # Juno Release
+
+# This template supports the use case of an application launched in the
+# NeCTAR Research Cloud that needs a distributed file system that can be mounted
+# as a POSIX mount in a *nix file stem.
+
+# It works for remote MacOS X client mounts via NFS.
+# Mounting for remote Ubuntu clients does not seem to work.
+# Remote connections tested against various nodes:
+# NCI - no
+# monash - no
+# melbourne-qh2 - no
+# QRIScloud - no
+# intersect - 
+
+
+# This configuration does not setup SSL, so client mounts
+# outside a tenancy do not use encrypted communications.
+
+# An improvement over the current configuration would use block storage
+# instead of transient instance storage.
+
 heat_template_version: 2014-10-16
 
-description: "Template to create a small Gluster cluster using the transient storage of the VM's.
-              Although we ask for an availability zone it is resolutely ignored by the heat instance
-              group resource. So it makes the location of this cluster a little bit hit and miss. Which
-              means that it might not be as performant as desired. :("
+description: "Template to create a small Gluster cluster using the transient storage of the VM's."
 
 parameters:
 
@@ -39,7 +57,7 @@ parameters:
         type: string
         label: Availability Zone
         description: Physical location of the server. 
-        default: NCI
+        default: intersect
         constraints:
             - allowed_values: [ monash, melbourne, QRIScloud, NCI, intersect, pawsey, sa, tasmania ]
               description: Value must be one of monash, melbourne, QRIScloud, NCI, intersect, pawsey, sa, tasmania.
@@ -85,25 +103,32 @@ resources:
                     ToPort: "111"
                     CidrIp: "0.0.0.0/0"
                     
-                -   # Gluster daemon and management
+                -   # Portmapper
+                    IpProtocol: "tcp"
+                    FromPort: "2049"
+                    ToPort: "2049"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Gluster daemon and management - 24007
+                    # Infiniband management - 24008
                     IpProtocol: "tcp"
                     FromPort: "24007"
                     ToPort: "24008"
                     CidrIp: "0.0.0.0/0"
                     
-                -   # Gluster version < 3.4 = number of nodes (10), adjust as necessary.
+                -   # Gluster version < 3.4 = number of bricks (10), adjust as necessary.
                     IpProtocol: "tcp"
                     FromPort: "24009"
                     ToPort: "24018"
                     CidrIp: "0.0.0.0/0"
                     
-                -   # Gluster version >= 3.4 = number of nodes (10), adjust as necessary
+                -   # Gluster version >= 3.4 = number of bricks (10), adjust as necessary
                     IpProtocol: "tcp"
                     FromPort: "49152"
                     ToPort: "49161"
                     CidrIp: "0.0.0.0/0"
                     
-                -    # NFS
+                -    # NFS 3 ports
                     IpProtocol: "tcp"
                     FromPort: "38465"
                     ToPort: "38467"
