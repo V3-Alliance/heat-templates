@@ -1,4 +1,17 @@
-HeatTemplateFormatVersion: '2012-12-12'
+# Juno Release
+
+# This template supports the use case of an application launched in the
+# NeCTAR Research Cloud that needs a distributed file system that can be mounted
+# as a POSIX mount in a *nix file stem.
+
+# This configuration does not setup SSL, so client mounts
+# outside a tenancy do not use encrypted communications.
+# Remote clients are not able to mount the Gluster volume.
+# "Connection refused" issues related to NeCTAR firewall rules maybe??
+
+# This template sets up block storage to be used by Gluster.
+
+heat_template_version: 2014-10-16
 
 Description: >
   NeCTAR Sample Template showing how to create a Gluster client instance, with a Cinder volume attached to the instance.

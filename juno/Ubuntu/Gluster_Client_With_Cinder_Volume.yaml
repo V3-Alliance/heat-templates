@@ -1,0 +1,172 @@
+# Juno Release
+
+# This template supports the use case of an application launched in the
+# NeCTAR Research Cloud that needs a distributed file system that can be mounted
+# as a POSIX mount in a *nix file stem.
+
+# Precondition: the Gluster SERVER is already operational.
+# Assumption: that /mnt can be demounted 
+# and that a subdirectory of /mnt can be used to mount a new file system.
+
+heat_template_version: 2014-10-16
+
+description: >
+    Template to create a Gluster CLIENT (remote file system), 
+    with attached Cinder volume (local file system).
+
+parameters:
+
+    key_name:
+        type: string
+        label: Key Name
+        description:
+            Name of an existing key pair registered with OpenStack to enable SSH access to the instance.
+        default: "my_nectar_key"
+            
+    instance_type:
+        type: string
+        label: Instance Type
+        description: Type of the instance (flavor) to be created.
+        default: "m1.small"
+        constraints:
+            - allowed_values: [ m1.small, m1.medium, m1.large, m1.xlarge ]
+              description: Value must be one of m1.small, m1.medium, m1.large or m1.xlarge.
+    
+    availability_zone:
+        type: string
+        label: Availability Zone
+        description: The NeCTAR zone in which the VM is to run (must have block storage). 
+        default: melbourne-np
+        constraints:
+            - allowed_values: [ melbourne-qh2, melbourne-np, monash, qld ]
+              description: Value must be one of melbourne-qh2, melbourne-np, monash, qld.
+    
+    image_id:
+        type: string
+        label: Virtual Machine Image
+        description: Base virtual machine image to be used to build compute instance.
+        default: ubuntu-12.04
+        constraints:
+            - allowed_values: [ ubuntu-12.04, ubuntu-14.04, ubuntu-14.10 ]
+              description: Value must be one of ubuntu-12.04, ubuntu-14.04, ubuntu-14.10.
+    
+    gluster_server_address:
+        type: string
+        label: Gluster Server Address (IP or domain name)
+        description: IP address or domain name of preexisting Gluster server instance.
+        default: 43.240.96.225
+
+    volume_size:
+        type: number
+        description: Size of the volume to be created in Gigabytes.
+        default: 1
+        constraints:
+            - range: { min: 1, max: 1024 }
+              description: must be between 1 and 1024 Gb.
+
+resources:
+
+    client_security_group:
+        type: "AWS::EC2::SecurityGroup"
+        properties:
+            GroupDescription: "Enable ssh and ping access."
+            SecurityGroupIngress:
+                -   # ping
+                    IpProtocol: "icmp"
+                    FromPort: "-1"
+                    ToPort: "-1"
+                    CidrIp: "0.0.0.0/0"
+                -   # ssh
+                    IpProtocol: "tcp"
+                    FromPort: "22"
+                    ToPort: "22"
+                    CidrIp: "0.0.0.0/0"
+                    
+    gluster_client:
+        type: OS::Nova::Server
+        properties:
+            name: Gluster client
+            key_name: { get_param: key_name }
+            image: 
+                "Fn::Select":
+                    - { get_param: image_id }
+                    -     
+                        "ubuntu-12.04": "c395c528-fb43-4066-9536-cf5c5efe806d"
+                        "ubuntu-14.04": "eeedf697-5a41-4d91-a478-01bb21e32cbe"
+                        "ubuntu-14.10": "fc48b5bb-e67d-4e39-b9ba-b6725c8b0c88"
+            flavor: { get_param: instance_type }
+            availability_zone: {get_param: availability_zone}
+            security_groups: [ { get_resource: client_security_group } ]
+            user_data_format: RAW
+            user_data:
+                str_replace:
+                    template: |
+                        #!/bin/bash -v
+                        echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+                        echo "Begin: run user_data bash script. "
+                        ############# Begin: common
+                        apt-get -y install PROPERTIES_PACKAGE
+                        add-apt-repository ppa:gluster/glusterfs-3.6
+                        apt-get update
+                        apt-get -y upgrade
+                        apt-get install -y glusterfs-client  xfsprogs
+                        # get rid of annoying message shown when running sudo command
+                        echo "127.0.0.1     `hostname`" | tee -a /etc/hosts
+                        # unmount the automatically mounted storage then remount a subdirectory.
+                        umount /mnt
+                        # Mount Gluster volume.
+                        mkdir -p REMOTE_MOUNT_DIRECTORY
+                        mount -t glusterfs GLUSTER_SERVER_ADDRESS:gvl-volume REMOTE_MOUNT_DIRECTORY
+                        # Mount persistent local storage.
+                        # If the volume is not copied it will have to be formatted like so:
+                        mkfs.xfs -f -i size=512 LOCAL_DEVICE
+                        mkdir -p LOCAL_MOUNT_DIRECTORY
+                        mount LOCAL_DEVICE LOCAL_MOUNT_DIRECTORY
+                        echo "End: run user_data bash script. "
+                        echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+                    params:
+                        REMOTE_MOUNT_DIRECTORY: "/mnt/glusterVol"
+                        LOCAL_MOUNT_DIRECTORY: "/mnt/cinderVol"
+                        GLUSTER_SERVER_ADDRESS: { get_param: gluster_server_address }
+                        PROPERTIES_PACKAGE: 
+                            "Fn::Select":
+                                - { get_param: image_id }
+                                -     
+                                    "ubuntu-12.04": "python-software-properties"
+                                    "ubuntu-14.04": "software-properties-common"
+                                    "ubuntu-14.10": "software-properties-common"
+                        LOCAL_DEVICE: /dev/vdc
+                            # Recommended but does not work as ID needs to be truncated to 20 characters.
+                            #{list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]}     
+
+    # http://docs.openstack.org/developer/heat/template_guide/openstack.html#OS::Cinder::Volume
+    cinder_volume:
+        type: OS::Cinder::Volume
+        properties:
+            name: Gluster client local storage
+            description: "Local persistent storage volume. "
+            # 2 GigaByte capacity, small, but this is just a demo
+            size: { get_param: volume_size }
+            availability_zone: {get_param: availability_zone}
+            
+    # http://docs.openstack.org/developer/heat/template_guide/openstack.html#OS::Cinder::VolumeAttachment
+    volume_attachment:
+        type: OS::Cinder::VolumeAttachment      
+        properties:
+            volume_id: { get_resource: cinder_volume }
+            instance_uuid: { get_resource: gluster_client }
+            mountpoint: 
+                /dev/vdc
+                # Recommended but does not work as ID needs to be truncated to 20 characters.
+                #list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]
+
+
+outputs:
+    "Client attributes": 
+        value: { get_attr: [gluster_client, first_address] }
+        description: "The IP number for the Gluster client, so the admin can manage the client..."
+    "End user instructions":
+        description: "The command to login to the client. Replace key name with the full path to the key file..."
+        value: 
+            list_join: [' ', ['ssh -i', get_param: key_name, get_attr: [gluster_client, first_address]]]
+

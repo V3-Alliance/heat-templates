@@ -4,15 +4,14 @@
 # NeCTAR Research Cloud that needs a distributed file system that can be mounted
 # as a POSIX mount in a *nix file stem.
 
-# It works for remote MacOS X client mounts via NFS.
-# Mounting for remote Ubuntu clients does not seem to work.
-# Remote connections tested against various nodes:
-# NCI - no
-# monash - no
-# melbourne-qh2 - no
-# QRIScloud - no
-# intersect - 
-
+# Remote mount worked ONCE for remote MacOS X client mounts via NFS. Not able to repeat.
+# Mounting for remote Ubuntu clients does not seem to work at all.
+# Remote connections tested and refused against various nodes:
+# NCI - refused
+# monash - refused
+# melbourne-qh2 - refused
+# QRIScloud - refused
+# intersect - refused
 
 # This configuration does not setup SSL, so client mounts
 # outside a tenancy do not use encrypted communications.
@@ -22,7 +21,7 @@
 
 heat_template_version: 2014-10-16
 
-description: "Template to create a small Gluster cluster using the transient storage of the VM's."
+description: "Template to create a small Gluster SERVER cluster using the transient storage of the VM's."
 
 parameters:
 
