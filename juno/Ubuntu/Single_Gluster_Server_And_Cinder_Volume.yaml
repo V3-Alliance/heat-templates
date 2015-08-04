@@ -9,90 +9,358 @@
 # Remote clients are not able to mount the Gluster volume.
 # "Connection refused" issues related to NeCTAR firewall rules maybe??
 
-# This template sets up block storage to be used by Gluster.
+# This template sets up Cinder block storage to be used by Gluster.
 
 heat_template_version: 2014-10-16
 
-Description: >
-  NeCTAR Sample Template showing how to create a Gluster client instance, with a Cinder volume attached to the instance.
+description: >
+  Template to create a SERVER cluster that provides a Gluster distributed file system.
+  The distributed storage is located on Cinder volumes, with each volume attached to a 
+  Nova server instance.
 
-Parameters:
-  KeyName:
-    Type: String
-    Description:
-      Name of an existing key pair to enable SSH access to the instance.
-  InstanceType:
-    Type: String
-    Description: Type of the instance to be created.
-    Default: m1.small
-    AllowedValues: [m1.small, m1.medium, m1.large, m1.xlarge, m1.xxlarge]
-  AvailabilityZone:
-    Type: String
-    Description: The NeCTAR zone in which the VM is to run (must have block storage)
-    Default: melbourne-np
-    AllowedValues: [melbourne-qh2, melbourne-np, monash, qld]
+parameters:
 
-Resources:
-  SecurityGroup:
-    Type: "AWS::EC2::SecurityGroup"
-    Properties:
-      GroupDescription: "Enable ssh access and icmp"
-      SecurityGroupIngress:
-        -
-          IpProtocol: "icmp"
-          FromPort: "-1"
-          ToPort: "-1"
-          CidrIp: "0.0.0.0/0"
-        -
-          IpProtocol: "tcp"
-          FromPort: "22"
-          ToPort: "22"
-          CidrIp: "0.0.0.0/0"
-  NovaInstance:
-    Type: OS::Nova::Server
-    Properties:
-      availability_zone: { Ref: AvailabilityZone }
-      # this is currently the only ubuntu instance with the heat tools installed
-      # given that we don't really use them, is it needed?
-      image: "6464e3f6-3e39-4b78-811f-de6511b42585"
-      flavor: { Ref: InstanceType }
-      key_name: { Ref: KeyName }
-      security_groups:
-        - { Ref: SecurityGroup }
-      user_data:
-        Fn::Base64:
-          Fn::Replace:
-          - mount_directory: "/export/gvl-vol-replica"
-          - |
-            #!/bin/bash -v
-            add-apt-repository ppa:semiosis/ubuntu-glusterfs-3.4
-            apt-get update
-            apt-get install -y glusterfs-server xfsprogs
-            # if we copy a volume no need for this line...
-            #mkfs.xfs -i size=512 /dev/vdc
-            mkdir -p mount_directory
-            mount /dev/vdc mount_directory
+    key_name:
+        type: string
+        label: Key Name
+        description:
+            Name of an existing key pair registered with OpenStack to enable SSH access to the instance.
+        default: "my_nectar_key"
+      
+    # Might not be much point in using larger instance types
+    # as we really just want the input/output to the block storage.      
+    instance_type:
+        type: string
+        label: Instance Type
+        description: Type of the instance (flavor) to be created.
+        default: "m1.small"
+        constraints:
+            - allowed_values: [ m1.small, m1.medium, m1.large, m1.xlarge ]
+              description: Value must be one of m1.small, m1.medium, m1.large or m1.xlarge.
+    
+    availability_zone:
+        type: string
+        label: Availability Zone
+        description: The NeCTAR zone in which the VM is to run (must have block storage). 
+        default: melbourne-np
+        constraints:
+            - allowed_values: [ melbourne-qh2, melbourne-np, monash, qld ]
+              description: Value must be one of melbourne-qh2, melbourne-np, monash, qld.
+    
+    image_id:
+        type: string
+        label: Virtual Machine Image
+        description: Base virtual machine image to be used to build compute instance.
+        default: ubuntu-12.04
+        constraints:
+            - allowed_values: [ ubuntu-12.04, ubuntu-14.04, ubuntu-14.10 ]
+              description: Value must be one of ubuntu-12.04, ubuntu-14.04, ubuntu-14.10.
 
-  CinderVolume:
-    Type: OS::Cinder::Volume
-    Properties:
-      # small, but this is just a demo
-      size: "2"
-      availability_zone: { Ref: AvailabilityZone }
-      # we will copy this volume full of data: in that way we don't have to rebuild it
-      source_volid: 11be09d6-52f4-4443-a0a5-f5618775ea24
-  VolumeAttachment:
-    Type: OS::Cinder::VolumeAttachment
-    Properties:
-      volume_id: { Ref: CinderVolume }
-      instance_uuid: { Ref: NovaInstance }
-      mountpoint: /dev/vdc
+    volume_size:
+        type: number
+        label: Volume Size / GB
+        description: Size of the persistent volume to be created in Gigabytes.
+        default: 1
+        constraints:
+            - range: { min: 1, max: 1024 }
+              description: must be between 1 and 1024 Gb.
+    
+    # We will limit the maximum number of server instances in the cluster to 10. Just because.
+    instance_count:
+        type: number
+        label: Cluster Size
+        description: "The number of server instances (nodes) created to make up the cluster. "
+        default: 2
+        constraints:
+            - range: { min: 1, max: 10 }
+              description: "Value must be between 1 and 10. "
 
-Outputs:
-  InstanceIP:
-    Description: Public IP address of the newly created Gluster client instance.
-    Value:
-      Fn::GetAtt:
-      - NovaInstance
-      - first_address
 
+resources:
+
+    cluster_security_group:
+        type: "AWS::EC2::SecurityGroup"
+        properties:
+            GroupDescription: "Enable access between the machines in the Gluster cluster."
+            SecurityGroupIngress:
+            
+                -   # Testing
+                    IpProtocol: "icmp"
+                    FromPort: "-1"
+                    ToPort: "-1"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Admin access
+                    IpProtocol: "tcp"
+                    FromPort: "22"
+                    ToPort: "22"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Portmapper
+                    IpProtocol: "tcp"
+                    FromPort: "111"
+                    ToPort: "111"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Portmapper
+                    IpProtocol: "udp"
+                    FromPort: "111"
+                    ToPort: "111"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Portmapper
+                    IpProtocol: "tcp"
+                    FromPort: "2049"
+                    ToPort: "2049"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Gluster daemon and management - 24007
+                    # Infiniband management - 24008
+                    IpProtocol: "tcp"
+                    FromPort: "24007"
+                    ToPort: "24008"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Gluster version < 3.4 = number of bricks (10), adjust as necessary.
+                    IpProtocol: "tcp"
+                    FromPort: "24009"
+                    ToPort: "24018"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -   # Gluster version >= 3.4 = number of bricks (10), adjust as necessary
+                    IpProtocol: "tcp"
+                    FromPort: "49152"
+                    ToPort: "49161"
+                    CidrIp: "0.0.0.0/0"
+                    
+                -    # NFS 3 ports
+                    IpProtocol: "tcp"
+                    FromPort: "38465"
+                    ToPort: "38467"
+                    CidrIp: "0.0.0.0/0"
+
+    cluster_group:
+        # http://docs.openstack.org/hot-reference/content/OS__Heat__ResourceGroup.html
+        type: "OS::Heat::ResourceGroup"
+        properties:
+            count: { get_param: instance_count }
+            resource_def:
+                type: OS::Nova::Server
+                properties:
+                    name: Gluster slave %index%
+                    key_name: { get_param: key_name }
+                    image: 
+                        "Fn::Select":
+                            - { get_param: image_id }
+                            -     
+                                "ubuntu-12.04": "c395c528-fb43-4066-9536-cf5c5efe806d"
+                                "ubuntu-14.04": "eeedf697-5a41-4d91-a478-01bb21e32cbe"
+                                "ubuntu-14.10": "fc48b5bb-e67d-4e39-b9ba-b6725c8b0c88"
+                    flavor: { get_param: instance_type }
+                    availability_zone: {get_param: availability_zone}
+                    security_groups: [ { get_resource: cluster_security_group } ]
+                    user_data_format: RAW
+                    user_data:
+                        str_replace:
+                            template: |
+                                #!/bin/bash
+                                echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+                                echo "Begin: run user_data bash script. "
+                                ############# Begin: common
+                                apt-get -y install PROPERTIES_PACKAGE
+                                add-apt-repository ppa:gluster/glusterfs-3.6
+                                apt-get update
+                                apt-get -y upgrade
+                                apt-get install -y glusterfs-server xfsprogs
+                                # get rid of annoying message
+                                echo "127.0.0.1     `hostname`" | tee -a /etc/hosts
+                                # Remount secondary storage at a new directory.
+                                umount /mnt
+                                mkdir -p /mnt/ephemeralVol
+                                mount /dev/vdb /mnt/ephemeralVol
+                                # Mount Cinder persistent local storage.
+                                mkfs.xfs -f -i size=512 LOCAL_DEVICE
+                                mkdir -p LOCAL_MOUNT_DIRECTORY
+                                mount LOCAL_DEVICE LOCAL_MOUNT_DIRECTORY
+                                # Make a place to store the Gluster bricks
+                                mkdir -p LOCAL_MOUNT_DIRECTORY/brick
+                                cp /etc/fstab /etc/fstab.bak
+                                echo "LOCAL_DEVICE        LOCAL_MOUNT_DIRECTORY    xfs    defaults 0       0"  >> /etc/fstab
+                                echo "Mount directory: LOCAL_MOUNT_DIRECTORY"
+                                echo "End: run user_data bash script. "
+                                ############# End: common
+                                echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+                            params:
+                                PROPERTIES_PACKAGE: 
+                                    "Fn::Select":
+                                        - { get_param: image_id }
+                                        -     
+                                            "ubuntu-12.04": "python-software-properties"
+                                            "ubuntu-14.04": "software-properties-common"
+                                            "ubuntu-14.10": "software-properties-common"
+                                LOCAL_MOUNT_DIRECTORY: "/data/glusterfs/volume1"
+                                LOCAL_DEVICE: /dev/vdc
+                                    # Recommended but does not work as ID needs to be truncated to 20 characters.
+                                    #{list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]}     
+
+    # See: http://hardysteven.blogspot.com.au/2014/09/using-heat-resourcegroup-resources.html
+    # We should be using a resource_def that loads in a stack file as a resource.
+    # But we are going to do the wrong thing anyway, 
+    # since the dashboard does not support multiple stack files.
+    cluster_volume_group:
+        # http://docs.openstack.org/hot-reference/content/OS__Heat__ResourceGroup.html
+        type: "OS::Heat::ResourceGroup"
+        properties:
+            count: { get_param: instance_count }
+            resource_def:
+                type: OS::Cinder::Volume
+                properties:
+                    name: Gluster server local storage slave %index%
+                    description: "Local persistent storage volume for cluster slave %index%. "
+                    size: { get_param: volume_size }
+                    availability_zone: {get_param: availability_zone}
+            
+    cluster_volume_attachment_group:
+        # http://docs.openstack.org/hot-reference/content/OS__Heat__ResourceGroup.html
+        type: "OS::Heat::ResourceGroup"
+        properties:
+            count: { get_param: instance_count }
+            resource_def:
+                type: OS::Cinder::VolumeAttachment      
+                properties:
+                    volume_id: { get_attr: [cluster_volume_group, "resource.%index%"] }
+                    instance_uuid: { get_attr: [cluster_group, "resource.%index%"]  }
+                    mountpoint: 
+                        /dev/vdc
+                        # Recommended, but does not work as GUID needs to be truncated to 20 characters.
+                        #list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]
+
+#    cluster_master:
+#        type: OS::Nova::Server
+#        properties:
+#            name: Gluster master
+#            key_name: { get_param: key_name }
+#            image: 
+#                "Fn::Select":
+#                    - { get_param: image_id }
+#                    -     
+#                        "ubuntu-12.04": "c395c528-fb43-4066-9536-cf5c5efe806d"
+#                        "ubuntu-14.04": "eeedf697-5a41-4d91-a478-01bb21e32cbe"
+#                        "ubuntu-14.10": "fc48b5bb-e67d-4e39-b9ba-b6725c8b0c88"
+#            flavor: { get_param: instance_type }
+#            availability_zone: {get_param: availability_zone}
+#            security_groups: [ { get_resource: cluster_security_group } ]
+#            user_data_format: RAW
+#            user_data:
+#                str_replace:
+#                    template: |
+#                        #!/bin/bash
+#                        echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+#                        echo "Begin: run user_data bash script. "
+#                        ############# Begin: common
+#                        apt-get -y install PROPERTIES_PACKAGE
+#                        add-apt-repository ppa:gluster/glusterfs-3.6
+#                        apt-get update
+#                        apt-get -y upgrade
+#                        apt-get install -y glusterfs-server xfsprogs
+#                        # get rid of annoying message shown when running sudo command
+#                        echo "127.0.0.1     `hostname`" | tee -a /etc/hosts
+#                        # Remount secondary storage at a new directory.
+#                        umount /mnt
+#                        mkdir -p /mnt/ephemeralVol
+#                        mount /dev/vdb /mnt/ephemeralVol
+#                        # Mount Cinder persistent local storage.
+#                        mkfs.xfs -f -i size=512 LOCAL_DEVICE
+#                        mkdir -p LOCAL_MOUNT_DIRECTORY
+#                        mount LOCAL_DEVICE LOCAL_MOUNT_DIRECTORY
+#                        # Make a place to store the Gluster bricks
+#                        mkdir -p LOCAL_MOUNT_DIRECTORY/brick
+#                        # Remount on boot.
+#                        cp /etc/fstab /etc/fstab.bak
+#                        echo "LOCAL_DEVICE        LOCAL_MOUNT_DIRECTORY    xfs    defaults 0       0"  >> /etc/fstab
+#                        echo "Mount directory: LOCAL_MOUNT_DIRECTORY"
+#                        ############# End: common
+#                        # Create the slaves
+#                        INSTANCES="INSTANCE_LIST"
+#                        echo "Instance IP addresses: $INSTANCES"
+#                        IFS=","
+#                        MAX_PROBES=20
+#                        PROBES=1
+#                        for INSTANCE in $INSTANCES; do
+#                            # assumption is that gluster peer probe will return error code if peer isn't set up yet.
+#                            until gluster peer probe $INSTANCE; do 
+#                                echo "Probe failed : $?"; 
+#                                if ["$PROBES" -gt "$MAX_PROBES" ]; then
+#                                    echo "Slave probe timeout. "
+#                                    exit 1
+#                                fi
+#                                PROBES=$((PROBES+1))
+#                                sleep 5; 
+#                            done
+#                            # now wait for a while as we only want to proceed once the peer is up to speed...
+#                            sleep 20
+#                        done
+#                        COMMAND_TAIL=""
+#                        COUNTER=0
+#                        for INSTANCE in $INSTANCES; do
+#                            COMMAND_TAIL+=" $INSTANCE:LOCAL_MOUNT_DIRECTORY/brick"
+#                            COUNTER=$((COUNTER+1))
+#                        done
+#                        # Add this machine's IP address to the volume create command.
+#                        IP=`ifconfig  | grep 'inet addr:'| grep -v '127.0.0.1' | cut -d: -f2 | awk '{ print $1}'`;
+#                        COMMAND_TAIL+=" $IP:LOCAL_MOUNT_DIRECTORY/brick"
+#                        COUNTER=$((COUNTER+1))
+#                        echo "Gluster replication: $COUNTER"
+#                        COMMAND="gluster volume create gvl-volume replica $COUNTER transport tcp $COMMAND_TAIL force"
+#                        echo "Create using: $COMMAND"
+#                        eval $COMMAND
+#                        gluster volume start gvl-volume
+#                        echo "End: run user_data bash script. "
+#                        echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
+#                    params:
+#                        PROPERTIES_PACKAGE: 
+#                            "Fn::Select":
+#                                - { get_param: image_id }
+#                                -     
+#                                    "ubuntu-12.04": "python-software-properties"
+#                                    "ubuntu-14.04": "software-properties-common"
+#                                    "ubuntu-14.10": "software-properties-common"
+#                        LOCAL_MOUNT_DIRECTORY: "/data/glusterfs/volume1"
+#                        LOCAL_DEVICE: /dev/vdc
+#                            # Recommended but does not work as GUID needs to be truncated to 20 characters.
+#                            #{list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]}     
+#                        INSTANCE_LIST: {list_join: [',', { get_attr: [cluster_group, first_address] }]}
+#
+#
+#    # http://docs.openstack.org/developer/heat/template_guide/openstack.html#OS::Cinder::Volume
+#    cluster_master_volume:
+#        type: OS::Cinder::Volume
+#        properties:
+#            name: Gluster server local storage
+#            description: "Local persistent storage volume for cluster master. "
+#            size: { get_param: volume_size }
+#            availability_zone: {get_param: availability_zone}
+#            
+#    # http://docs.openstack.org/developer/heat/template_guide/openstack.html#OS::Cinder::VolumeAttachment
+#    cluster_master_volume_attachment:
+#        type: OS::Cinder::VolumeAttachment      
+#        properties:
+#            volume_id: { get_resource: cluster_master_volume }
+#            instance_uuid: { get_resource: cluster_master }
+#            mountpoint: 
+#                /dev/vdc
+#                # Recommended, but does not work as ID needs to be truncated to 20 characters.
+#                #list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]
+#
+outputs:
+#    "Master attributes": 
+#        value: { get_attr: [cluster_master, first_address] }
+#        description: "The IP number for the Gluster master server, so the admin can manage the master..."
+    "Slave attributes": 
+        value: {list_join: [',', { get_attr: [cluster_group, first_address] }]}
+        description: "The IP numbers for the Gluster slave servers, so the admin can manage the slaves..."
+#    "End user instructions":
+#        description: "The command executed by the end user to mount the Gluster file system on some other machine..."
+#        value: 
+#            list_join: ['', ['sudo mkdir -p /mnt/glusterVol && sudo mount -t glusterfs ', get_attr: [cluster_master, first_address], ':gvl-volume /mnt/glusterVol']]
+#

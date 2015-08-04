@@ -56,10 +56,10 @@ parameters:
         type: string
         label: Availability Zone
         description: Physical location of the server. 
-        default: intersect
+        default: melbourne-np
         constraints:
-            - allowed_values: [ monash, melbourne, QRIScloud, NCI, intersect, pawsey, sa, tasmania ]
-              description: Value must be one of monash, melbourne, QRIScloud, NCI, intersect, pawsey, sa, tasmania.
+            - allowed_values: [ monash, melbourne-qh2, melbourne-np, QRIScloud, NCI, intersect, pawsey, sa, tasmania ]
+              description: Value must be one of monash, melbourne-qh2, melbourne-np, QRIScloud, NCI, intersect, pawsey, sa, tasmania.
     
     image_id:
         type: string
@@ -141,7 +141,7 @@ resources:
             resource_def:
                 type: OS::Nova::Server
                 properties:
-                    name: Gluster slave %index%
+                    name: Gluster ephmemeral slave %index%
                     key_name: { get_param: key_name }
                     image: 
                         "Fn::Select":
@@ -194,7 +194,7 @@ resources:
     master_server:
         type: OS::Nova::Server
         properties:
-            name: Gluster master
+            name: Gluster ephmemeral master
             key_name: { get_param: key_name }
             image: 
                 "Fn::Select":

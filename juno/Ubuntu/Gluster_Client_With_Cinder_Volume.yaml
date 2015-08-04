@@ -35,7 +35,7 @@ parameters:
     availability_zone:
         type: string
         label: Availability Zone
-        description: The NeCTAR zone in which the VM is to run (must have block storage). 
+        description: The NeCTAR zone in which the VM is to run. 
         default: melbourne-np
         constraints:
             - allowed_values: [ melbourne-qh2, melbourne-np, monash, qld ]
@@ -58,6 +58,7 @@ parameters:
 
     volume_size:
         type: number
+        label: Volume Size / GB
         description: Size of the volume to be created in Gigabytes.
         default: 1
         constraints:
@@ -113,7 +114,11 @@ resources:
                         # get rid of annoying message shown when running sudo command
                         echo "127.0.0.1     `hostname`" | tee -a /etc/hosts
                         # unmount the automatically mounted storage then remount a subdirectory.
+                        # I think we lose the secondary ephemeral storage if umount.
                         umount /mnt
+                        # So we remount it at a new directory.
+                        mkdir -p /mnt/ephemeralVol
+                        mount /dev/vdb /mnt/ephemeralVol
                         # Mount Gluster volume.
                         mkdir -p REMOTE_MOUNT_DIRECTORY
                         mount -t glusterfs GLUSTER_SERVER_ADDRESS:gvl-volume REMOTE_MOUNT_DIRECTORY
@@ -125,9 +130,6 @@ resources:
                         echo "End: run user_data bash script. "
                         echo "<<<<<<<<<<<<<<<<<<<<<<<<<<<<<"
                     params:
-                        REMOTE_MOUNT_DIRECTORY: "/mnt/glusterVol"
-                        LOCAL_MOUNT_DIRECTORY: "/mnt/cinderVol"
-                        GLUSTER_SERVER_ADDRESS: { get_param: gluster_server_address }
                         PROPERTIES_PACKAGE: 
                             "Fn::Select":
                                 - { get_param: image_id }
@@ -135,9 +137,12 @@ resources:
                                     "ubuntu-12.04": "python-software-properties"
                                     "ubuntu-14.04": "software-properties-common"
                                     "ubuntu-14.10": "software-properties-common"
+                        LOCAL_MOUNT_DIRECTORY: "/mnt/cinderVol"
                         LOCAL_DEVICE: /dev/vdc
                             # Recommended but does not work as ID needs to be truncated to 20 characters.
                             #{list_join: ['', ['/dev/disk/by-id/virtio-', get_resource: cinder_volume ]]}     
+                        REMOTE_MOUNT_DIRECTORY: "/mnt/glusterVol"
+                        GLUSTER_SERVER_ADDRESS: { get_param: gluster_server_address }
 
     # http://docs.openstack.org/developer/heat/template_guide/openstack.html#OS::Cinder::Volume
     cinder_volume:
